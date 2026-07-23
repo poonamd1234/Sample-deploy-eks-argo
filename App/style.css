@@ -1,0 +1,135 @@
+:root {
+  --bg: #f7f7fb;
+  --card-bg: #ffffff;
+  --text: #1f2430;
+  --muted: #8a8fa3;
+  --accent: #5b5fef;
+  --accent-hover: #4448c9;
+  --border: #e6e6f0;
+  --done: #c9cbe0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 60px 20px;
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+}
+
+.app {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 8px 24px rgba(20, 20, 43, 0.06);
+}
+
+h1 {
+  margin: 0 0 20px;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.task-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.task-form input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.task-form input:focus {
+  border-color: var(--accent);
+}
+
+.task-form button {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.task-form button:hover {
+  background: var(--accent-hover);
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.task-item span {
+  flex: 1;
+  font-size: 0.95rem;
+  word-break: break-word;
+}
+
+.task-item.done span {
+  text-decoration: line-through;
+  color: var(--done);
+}
+
+.task-item button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.task-item button:hover {
+  color: #e5484d;
+  background: #fdf0f0;
+}
+
+.empty-state {
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.9rem;
+  margin: 20px 0;
+}
+
+.stats {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
