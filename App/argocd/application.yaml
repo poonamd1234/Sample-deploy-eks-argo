@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-static-app
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    # Update this to your actual repo URL
+    repoURL: https://github.com/<YOUR_GITHUB_USERNAME>/Sample-deploy-eks-argo.git
+    targetRevision: main
+    path: App/k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sample-static-app
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
