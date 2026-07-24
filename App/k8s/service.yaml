@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-static-app
+  namespace: sample-static-app
+  labels:
+    app: sample-static-app
+spec:
+  type: ClusterIP
+  selector:
+    app: sample-static-app
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
