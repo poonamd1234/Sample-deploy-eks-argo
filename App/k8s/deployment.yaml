@@ -19,7 +19,7 @@ spec:
         - name: sample-static-app
           # Replace with your image registry/repo, e.g.:
           # <account-id>.dkr.ecr.<region>.amazonaws.com/sample-static-app:latest
-          image: 930501832757.dkr.ecr.ap-south-1.amazonaws.com/sample-deploy-eks-argo:3
+          image: 930501832757.dkr.ecr.ap-south-1.amazonaws.com/sample-deploy-eks-argo:5
           ports:
             - containerPort: 80
           resources:
