@@ -8,7 +8,7 @@ spec:
 
   source:
     # Update this to your actual repo URL
-    repoURL: https://github.com/<YOUR_GITHUB_USERNAME>/Sample-deploy-eks-argo.git
+    repoURL: https://github.com/poonamd1234/Sample-deploy-eks-argo.git
     targetRevision: main
     path: App/k8s
 
