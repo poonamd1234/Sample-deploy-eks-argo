@@ -1,0 +1,64 @@
+name: Build and Push to ECR
+
+# Runs only when app code changes.
+# IMPORTANT: excludes App/k8s/** and App/argocd/** — this workflow itself
+# commits to App/k8s/deployment.yaml at the end, and without this exclusion
+# that commit would re-trigger the workflow in an infinite loop.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "App/**"
+      - "!App/k8s/**"
+      - "!App/argocd/**"
+
+env:
+  AWS_REGION: us-east-1                 # <-- change to your region
+  ECR_REPOSITORY: sample-static-app     # <-- must match your ECR repo name
+
+permissions:
+  contents: write   # required so this workflow can commit the updated image tag back
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "${{ env.ECR_REPOSITORY }}" \
+            || aws ecr create-repository --repository-name "${{ env.ECR_REPOSITORY }}"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        working-directory: App
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Update deployment.yaml with new image
+        run: |
+          sed -i "s|image: .*|image: ${{ env.IMAGE_URI }}|" App/k8s/deployment.yaml
+
+      - name: Commit and push updated manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add App/k8s/deployment.yaml
+          git diff --cached --quiet || git commit -m "ci: deploy image ${{ github.sha }}"
+          git push
