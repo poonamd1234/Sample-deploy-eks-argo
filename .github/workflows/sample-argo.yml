@@ -11,10 +11,11 @@ on:
       - "App/**"
       - "!App/k8s/**"
       - "!App/argocd/**"
+  workflow_dispatch:   # adds a "Run workflow" button in the Actions tab
 
 env:
-  AWS_REGION: ap-south-1                 # <-- change to your region
-  ECR_REPOSITORY: sample-deploy-eks-argo    # <-- must match your ECR repo name
+  AWS_REGION: ap-south-1                # matches your ECR repo's region
+  ECR_REPOSITORY: sample-deploy-eks-argo # matches your existing ECR repo name
 
 permissions:
   contents: write   # required so this workflow can commit the updated image tag back
@@ -46,7 +47,7 @@ jobs:
       - name: Build and push image
         working-directory: App
         run: |
-          IMAGE_URI=IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.run_number }}"
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.run_number }}"
           docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
           echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
@@ -60,5 +61,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add App/k8s/deployment.yaml
-          git diff --cached --quiet || git commit -m "ci: deploy image ${{ github.sha }}"
+          git diff --cached --quiet || git commit -m "ci: deploy image build #${{ github.run_number }}"
           git push
