@@ -13,8 +13,8 @@ on:
       - "!App/argocd/**"
 
 env:
-  AWS_REGION: us-east-1                 # <-- change to your region
-  ECR_REPOSITORY: sample-static-app     # <-- must match your ECR repo name
+  AWS_REGION: ap-south-1                 # <-- change to your region
+  ECR_REPOSITORY: sample-deploy-eks-argo    # <-- must match your ECR repo name
 
 permissions:
   contents: write   # required so this workflow can commit the updated image tag back
