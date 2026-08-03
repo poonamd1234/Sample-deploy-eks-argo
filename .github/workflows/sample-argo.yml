@@ -1,65 +1,153 @@
-name: Build and Push to ECR
+name: Build, Scan and Deploy to ECR
 
-# Runs only when app code changes.
-# IMPORTANT: excludes App/k8s/** and App/argocd/** — this workflow itself
-# commits to App/k8s/deployment.yaml at the end, and without this exclusion
-# that commit would re-trigger the workflow in an infinite loop.
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - "App/**"
       - "!App/k8s/**"
       - "!App/argocd/**"
-  workflow_dispatch:   # adds a "Run workflow" button in the Actions tab
+
+  workflow_dispatch:
 
 env:
-  AWS_REGION: ap-south-1                # matches your ECR repo's region
-  ECR_REPOSITORY: sample-deploy-eks-argo # matches your existing ECR repo name
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: sample-deploy-eks-argo
 
 permissions:
-  contents: write   # required so this workflow can commit the updated image tag back
+  actions: read
+  contents: write
+  security-events: write
 
 jobs:
-  build-and-push:
+  build-and-deploy:
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v7
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+    ##########################################################
+    # Checkout
+    ##########################################################
 
-      - name: Ensure ECR repository exists
-        run: |
-          aws ecr describe-repositories --repository-names "${{ env.ECR_REPOSITORY }}" \
-            || aws ecr create-repository --repository-name "${{ env.ECR_REPOSITORY }}"
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+    ##########################################################
+    # Secret Scanning - Gitleaks
+    ##########################################################
 
-      - name: Build and push image
-        working-directory: App
-        run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.run_number }}"
-          docker build -t "$IMAGE_URI" .
-          docker push "$IMAGE_URI"
-          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+    - name: Run Gitleaks Secret Scan
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update deployment.yaml with new image
-        run: |
-          sed -i "s|image: .*|image: ${{ env.IMAGE_URI }}|" App/k8s/deployment.yaml
+    ##########################################################
+    # Static Code Analysis - CodeQL
+    ##########################################################
 
-      - name: Commit and push updated manifest
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add App/k8s/deployment.yaml
-          git diff --cached --quiet || git commit -m "ci: deploy image build #${{ github.run_number }}"
-          git push
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+    ##########################################################
+    # Configure AWS Credentials
+    ##########################################################
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    ##########################################################
+    # Ensure ECR Repository
+    ##########################################################
+
+    - name: Ensure ECR Repository Exists
+      run: |
+        aws ecr describe-repositories \
+          --repository-names "${{ env.ECR_REPOSITORY }}" \
+        || aws ecr create-repository \
+          --repository-name "${{ env.ECR_REPOSITORY }}"
+
+    ##########################################################
+    # Login to Amazon ECR
+    ##########################################################
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    ##########################################################
+    # Build Docker Image
+    ##########################################################
+
+    - name: Build Docker Image
+      working-directory: App
+      run: |
+        IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.run_number }}
+
+        docker build -t $IMAGE_URI .
+
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+    ##########################################################
+    # Trivy Image Scan
+    ##########################################################
+
+    - name: Scan Docker Image
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        image-ref: ${{ env.IMAGE_URI }}
+        format: table
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: 1
+
+    ##########################################################
+    # Push Docker Image
+    ##########################################################
+
+    - name: Push Docker Image to ECR
+      run: |
+        docker push ${{ env.IMAGE_URI }}
+
+    ##########################################################
+    # Kubernetes Manifest Scan
+    ##########################################################
+
+    - name: Scan Kubernetes Manifests
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: App/k8s
+
+    ##########################################################
+    # Update Deployment Manifest
+    ##########################################################
+
+    - name: Update deployment.yaml
+      run: |
+        sed -i "s|image: .*|image: ${{ env.IMAGE_URI }}|" App/k8s/deployment.yaml
+
+    ##########################################################
+    # Commit Manifest
+    ##########################################################
+
+    - name: Commit Updated Manifest
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        git add App/k8s/deployment.yaml
+
+        git diff --cached --quiet || \
+        git commit -m "ci: deploy image build #${{ github.run_number }}"
+
+        git push
