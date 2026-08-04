@@ -88,6 +88,7 @@ jobs:
             --repository-name "${ECR_REPOSITORY}"
 
       - name: Log in to Amazon ECR
+        id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
       # ----------------------------------------------------------------
