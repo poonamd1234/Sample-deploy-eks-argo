@@ -15,13 +15,26 @@ spec:
       labels:
         app: sample-static-app
     spec:
+      automountServiceAccountToken: false   # CKV_K8S_38
+      securityContext:                      # pod-level
+        runAsNonRoot: true                  # CKV_K8S_23
+        runAsUser: 10001                    # CKV_K8S_40 (high UID)
+        seccompProfile:
+          type: RuntimeDefault              # CKV_K8S_31
       containers:
         - name: sample-static-app
           # Replace with your image registry/repo, e.g.:
           # <account-id>.dkr.ecr.<region>.amazonaws.com/sample-static-app:latest
+          #
+          # CKV_K8S_43 (image should use digest) is not fixed here: this
+          # tag is set dynamically by CI on every build. To satisfy this
+          # check, resolve the pushed image's digest in the pipeline
+          # (e.g. `aws ecr describe-images`) and substitute it into this
+          # manifest instead of the tag before deploy/Argo CD sync.
           image: 930501832757.dkr.ecr.ap-south-1.amazonaws.com/sample-deploy-eks-argo:5
+          imagePullPolicy: Always           # CKV_K8S_15
           ports:
-            - containerPort: 80
+            - containerPort: 8080           # non-root nginx listens on 8080, not 80
           resources:
             requests:
               cpu: "50m"
@@ -29,15 +42,35 @@ spec:
             limits:
               cpu: "200m"
               memory: "128Mi"
+          securityContext:                  # container-level
+            allowPrivilegeEscalation: false # CKV_K8S_20
+            readOnlyRootFilesystem: true    # CKV_K8S_22
+            capabilities:
+              drop:
+                - ALL                       # CKV_K8S_37
+          volumeMounts:                     # writable scratch space required
+            - name: nginx-cache             # by nginx despite read-only rootfs
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8080
             initialDelaySeconds: 3
             periodSeconds: 5
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
