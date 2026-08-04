@@ -1,153 +1,149 @@
-name: Build, Scan and Deploy to ECR
+name: Build, Scan, and Deploy
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - "App/**"
-      - "!App/k8s/**"
-      - "!App/argocd/**"
-
-  workflow_dispatch:
-
-env:
-  AWS_REGION: ap-south-1
-  ECR_REPOSITORY: sample-deploy-eks-argo
 
 permissions:
-  actions: read
-  contents: write
-  security-events: write
+  contents: read
+  security-events: write   # required for CodeQL / gitleaks SARIF upload
+  id-token: write          # required for AWS OIDC (no static keys)
 
 jobs:
   build-and-deploy:
-
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ap-south-1
+      ECR_REPOSITORY: sample-deploy-eks-argo
 
     steps:
+      # ----------------------------------------------------------------
+      # 1. Checkout
+      # NOTE: actions/checkout is GitHub's own action and was NOT part of
+      # the Trivy supply-chain incident, so a version tag is reasonably
+      # safe. For maximum hardening, pin to a commit SHA instead:
+      #   gh api repos/actions/checkout/commits/v4 --jq .sha
+      # ----------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    ##########################################################
-    # Checkout
-    ##########################################################
+      # ----------------------------------------------------------------
+      # 2. Secret scanning
+      # ----------------------------------------------------------------
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      # ----------------------------------------------------------------
+      # 3. CodeQL static analysis
+      # ----------------------------------------------------------------
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
 
-    ##########################################################
-    # Secret Scanning - Gitleaks
-    ##########################################################
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
 
-    - name: Run Gitleaks Secret Scan
-      uses: gitleaks/gitleaks-action@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ----------------------------------------------------------------
+      # 4. AWS auth via OIDC — NO long-lived access keys.
+      #
+      # Prerequisites (one-time setup in your AWS account):
+      #   1. Create an IAM OIDC identity provider for
+      #      https://token.actions.githubusercontent.com
+      #      (audience: sts.amazonaws.com)
+      #   2. Create an IAM role with a trust policy scoped to this repo,
+      #      e.g. condition on:
+      #        "token.actions.githubusercontent.com:sub":
+      #          "repo:poonamdevops/Sample-deploy-eks-argo:ref:refs/heads/main"
+      #   3. Attach the least-privilege ECR/EKS permissions that role needs.
+      #   4. Store the role's ARN in a repo secret named AWS_ROLE_ARN.
+      #   5. Delete the old AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+      #      secrets once this is working — and rotate/deactivate the
+      #      underlying IAM user's keys in AWS, since they were used
+      #      in a workflow that ran a since-compromised action.
+      # ----------------------------------------------------------------
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    ##########################################################
-    # Static Code Analysis - CodeQL
-    ##########################################################
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "${ECR_REPOSITORY}" \
+          || aws ecr create-repository \
+            --repository-name "${ECR_REPOSITORY}"
 
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: javascript
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      # ----------------------------------------------------------------
+      # 5. Build image
+      # ----------------------------------------------------------------
+      - name: Build Docker image
+        run: |
+          IMAGE_URI="${{ steps.ecr-login.outputs.registry }}/${ECR_REPOSITORY}:${{ github.run_number }}"
+          docker build -t "$IMAGE_URI" .
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
 
-    ##########################################################
-    # Configure AWS Credentials
-    ##########################################################
+      # ----------------------------------------------------------------
+      # 6. Trivy image scan
+      #
+      # Pinned to v0.36.0 @ ed142fd0673e97e23eac54620cfb913e5ce36c25 —
+      # verified (GPG-signed), immutable release published 22 Apr 2026,
+      # well after the March 2026 supply-chain compromise of
+      # aquasecurity/trivy-action (which affected tags 0.0.1–0.34.2,
+      # including the v0.33.1 the original workflow used) and of
+      # aquasecurity/setup-trivy (which trivy-action invokes internally).
+      #
+      # Re-verify before reuse: https://github.com/aquasecurity/trivy-action/releases
+      # ----------------------------------------------------------------
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_URI }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          scan-type: image
+          vuln-type: os,library
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          cache: true
+          version: v0.72.0   # verified, GPG-signed release — check for newer before use
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v6
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+      # ----------------------------------------------------------------
+      # 7. IaC / config scanning
+      # NOTE: original logs showed a checkov-action image being pulled
+      # but the step's exact inputs weren't visible in the run I saw.
+      # Filling in a reasonable default — adjust scan-ref/output as needed.
+      # As with the other third-party actions, pin @master to a commit
+      # SHA once you confirm the exact config you want:
+      #   gh api repos/bridgecrewio/checkov-action/commits/master --jq .sha
+      # ----------------------------------------------------------------
+      - name: Run Checkov IaC scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          quiet: true
+          soft_fail: false
 
-    ##########################################################
-    # Ensure ECR Repository
-    ##########################################################
+      # ----------------------------------------------------------------
+      # 8. Push image + deploy
+      # NOTE: the run I inspected failed at the Trivy step, so I never
+      # saw the push/deploy steps that presumably follow (this repo is
+      # named "deploy-eks-argo", implying an EKS + Argo CD sync step).
+      # Replace this placeholder with your actual push/deploy commands.
+      # ----------------------------------------------------------------
+      - name: Push image to ECR
+        run: docker push "${{ env.IMAGE_URI }}"
 
-    - name: Ensure ECR Repository Exists
-      run: |
-        aws ecr describe-repositories \
-          --repository-names "${{ env.ECR_REPOSITORY }}" \
-        || aws ecr create-repository \
-          --repository-name "${{ env.ECR_REPOSITORY }}"
-
-    ##########################################################
-    # Login to Amazon ECR
-    ##########################################################
-
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-
-    ##########################################################
-    # Build Docker Image
-    ##########################################################
-
-    - name: Build Docker Image
-      working-directory: App
-      run: |
-        IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.run_number }}
-
-        docker build -t $IMAGE_URI .
-
-        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
-
-    ##########################################################
-    # Trivy Image Scan
-    ##########################################################
-
-    - name: Scan Docker Image
-      uses: aquasecurity/trivy-action@v0.33.1
-      with:
-        image-ref: ${{ env.IMAGE_URI }}
-        format: table
-        severity: HIGH,CRITICAL
-        ignore-unfixed: true
-        exit-code: 1
-
-    ##########################################################
-    # Push Docker Image
-    ##########################################################
-
-    - name: Push Docker Image to ECR
-      run: |
-        docker push ${{ env.IMAGE_URI }}
-
-    ##########################################################
-    # Kubernetes Manifest Scan
-    ##########################################################
-
-    - name: Scan Kubernetes Manifests
-      uses: bridgecrewio/checkov-action@master
-      with:
-        directory: App/k8s
-
-    ##########################################################
-    # Update Deployment Manifest
-    ##########################################################
-
-    - name: Update deployment.yaml
-      run: |
-        sed -i "s|image: .*|image: ${{ env.IMAGE_URI }}|" App/k8s/deployment.yaml
-
-    ##########################################################
-    # Commit Manifest
-    ##########################################################
-
-    - name: Commit Updated Manifest
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-        git add App/k8s/deployment.yaml
-
-        git diff --cached --quiet || \
-        git commit -m "ci: deploy image build #${{ github.run_number }}"
-
-        git push
+      # - name: Sync Argo CD application
+      #   run: |
+      #     argocd app set <app-name> --helm-set image.tag=${{ github.run_number }}
+      #     argocd app sync <app-name>
