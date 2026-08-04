@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
   security-events: write   # required for CodeQL / gitleaks SARIF upload
-  id-token: write          # required for AWS OIDC (no static keys)
+  # id-token: write        # uncomment if/when you switch AWS auth to OIDC
 
 jobs:
   build-and-deploy:
@@ -49,9 +49,15 @@ jobs:
         uses: github/codeql-action/analyze@v3
 
       # ----------------------------------------------------------------
-      # 4. AWS auth via OIDC — NO long-lived access keys.
+      # 4. AWS auth via static access keys (current setup).
       #
-      # Prerequisites (one-time setup in your AWS account):
+      # These still need to be ROTATED — the previous keys ran in a
+      # workflow step that used a since-compromised action version,
+      # so treat them as exposed: deactivate/delete them in IAM and
+      # generate new ones, then update the two secrets below.
+      #
+      # RECOMMENDED NEXT STEP — switch to OIDC (no long-lived keys at
+      # all), which removes this rotation problem going forward:
       #   1. Create an IAM OIDC identity provider for
       #      https://token.actions.githubusercontent.com
       #      (audience: sts.amazonaws.com)
@@ -61,15 +67,17 @@ jobs:
       #          "repo:poonamdevops/Sample-deploy-eks-argo:ref:refs/heads/main"
       #   3. Attach the least-privilege ECR/EKS permissions that role needs.
       #   4. Store the role's ARN in a repo secret named AWS_ROLE_ARN.
-      #   5. Delete the old AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-      #      secrets once this is working — and rotate/deactivate the
-      #      underlying IAM user's keys in AWS, since they were used
-      #      in a workflow that ran a since-compromised action.
+      #   5. Replace this step's `with:` block with:
+      #        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+      #        aws-region: ${{ env.AWS_REGION }}
+      #      and delete the AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+      #      secrets once that's confirmed working.
       # ----------------------------------------------------------------
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Ensure ECR repository exists
