@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sample-static-app
+  namespace: sample-static-app
+spec:
+  podSelector:
+    matchLabels:
+      app: sample-static-app
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Adjust to your actual ingress path — this allows traffic from any
+    # pod in the cluster on the app port. If you're using an ingress
+    # controller, scope this to its namespace/labels instead, e.g.:
+    #   from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: ingress-nginx
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS is required for basically anything running in the cluster
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
